@@ -1,0 +1,5 @@
+backend/volunteer/obj/
+backend/volunteer/bin/
+.vscode/
+frontend/node_modules
+frontend/node_modules/

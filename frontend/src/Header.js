@@ -9,21 +9,17 @@ function Header() {
     return (
         <Navbar expand="lg" className="bg-body-tertiary">
             <Container>
-                <Navbar.Brand as={Link} to="/">Scheduling</Navbar.Brand>
+                <Navbar.Brand as={Link} to="/">Navigation</Navbar.Brand>
 
                 <Navbar.Toggle aria-controls="basic-navbar-nav" />
 
                 <Navbar.Collapse id="basic-navbar-nav">
                     <Nav className="me-auto">
-                        <Nav.Link as={Link} to="/">Calendar</Nav.Link>
+                        <Nav.Link as={Link} to="/">Profile</Nav.Link>
 
-                        <Nav.Link as={Link} to="/login">Login</Nav.Link>
+                        <Nav.Link as={Link} to="/calendar">Calendar</Nav.Link>
 
                         <NavDropdown title="More" id="basic-nav-dropdown">
-                            <NavDropdown.Item as={Link} to="/profile">
-                                Profile
-                            </NavDropdown.Item>
-
                             <NavDropdown.Item as={Link} to="/project">
                                 Project
                             </NavDropdown.Item>
@@ -35,8 +31,6 @@ function Header() {
                         </NavDropdown>
                     </Nav>
                 </Navbar.Collapse>
-
-                <Navbar.Brand>{}</Navbar.Brand>
 
             </Container>
         </Navbar>

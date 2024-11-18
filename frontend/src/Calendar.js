@@ -1,3 +1,5 @@
+import './styles/text.css';
+
 import Button from 'react-bootstrap/Button';
 import ButtonGroup from 'react-bootstrap/ButtonGroup';
 import ButtonToolbar from 'react-bootstrap/ButtonToolbar';
@@ -5,20 +7,34 @@ import Col from 'react-bootstrap/Col';
 import Container from 'react-bootstrap/Container';
 import Row from 'react-bootstrap/Row';
 import Form from 'react-bootstrap/Form';
+import Modal from 'react-bootstrap/Modal';
 
 import EventCreator from './EventCreator';
 import Footer from './Footer';
 
 import { useEffect, useState } from 'react';
 
-import { HOSTNAME } from './Host';
+import { useIsAuthenticated } from '@azure/msal-react';
+import { useMsal } from "@azure/msal-react";
+import { loginRequest } from './authConfig';
 
-const hostname = HOSTNAME;
+const hostname = process.env.REACT_APP_LOCAL_HOST;
+// const frontendAzure = process.env.REACT_APP_FRONT_AZ;
 
 function Calendar() {
     const days   = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
     const months = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
     const today  = new Date();
+
+    const { instance, accounts } = useMsal();
+
+    const getToken = async () => {
+        const response = await instance.acquireTokenSilent({
+            ...loginRequest,
+            account: accounts[0],
+        });
+        return response.accessToken;
+    };
 
     /**
      * Event = {
@@ -39,10 +55,29 @@ function Calendar() {
                 .then(response => response.json())
                 .then(data => {
                     setEvents(data)
-                });
+                })
+                .catch(error => console.error('Error fetching events: ', error));
         }
-        //console.log(events);
     }, [events]);
+
+    /**
+     * I hoped this would make the Azure deployment work, but it doesn't and I've run out of time to debug
+     */
+    // useEffect(() => {
+    //     if (events.length === 0) {
+    //         fetch(hostname + '/getEvents', {
+    //                 method: 'GET',
+    //                 headers: {
+    //                     'Access-Control-Allow-Origin': frontendAzure
+    //                 }
+    //             })
+    //             .then(response => response.json())
+    //             .then(data => {
+    //                 setEvents(data)
+    //             })
+    //             .catch(error => console.error('Error fetching events: ', error));
+    //     }
+    // }, [events]);
 
     /**
      * This helper function is passed to Admin.js
@@ -69,7 +104,7 @@ function Calendar() {
             setEvents(events.map((e) => {
                 return e.id === updatedEvent.id ? { ...e, ...updatedEvent} : e
             }));
-            return response.text();
+            return updateEvent;
         } catch (error) {
             console.log('Failed to PUT event!', error);
         }
@@ -87,27 +122,34 @@ function Calendar() {
      */
     async function postEvent(event) {
         try {
+            const token = await getToken();
+            
             const response = await fetch(hostname + '/postEvent', {
                 method: 'POST',
                 headers: {
-                    'Content-Type': 'application/json'
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`
                 },
                 body: JSON.stringify(event)
             });
 
-            console.log('Added event ' + event.title);
             const data = await response.json();
             setEvents([...events, data]);
+            console.log('Added event ' + event.title);
         } catch (error) {
             console.log('Failed to POST event!', error);
         }
     }
 
     ///////////////////////////////////////////////////////////////////////////////////////////////////////
+    // CALENDAR - many functions in this section were corrected by ChatGPT-4o
 
     const [selectedMonth, setMonth] = useState(today.getMonth());
     //const [selectedYear, setYear] = useState(today.getFullYear());
     const selectedYear = today.getFullYear();
+
+    const startOfMonth = (year, month) => new Date(year, month, 1);
+    const endOfMonth = (year, month) => new Date(year, month + 1, 0);
 
     /** @returns Cycles month forward */
     const nextMonth = () => {
@@ -129,14 +171,7 @@ function Calendar() {
         }
     };
 
-    ///////////////////////////////////////////////////////////////////////////////////////////////////////
-    // CALENDAR
-
-    const startOfMonth = (year, month) => new Date(year, month, 1);
-    const endOfMonth = (year, month) => new Date(year, month + 1, 0);
-
     /**
-     * @param {*} date 
      * @returns The start of the week based on the given date.
      */
     const startOfWeek = (date) => {
@@ -145,7 +180,6 @@ function Calendar() {
     };
 
     /**
-     * @param {*} date 
      * @returns The end of the week based on the given date.
      */
     const endOfWeek = (date) => {
@@ -154,7 +188,7 @@ function Calendar() {
     };
 
     /**
-     * Generate the calendar grid for the current month. This function was corrected by ChatGPT-4
+     * Generate the calendar grid for the current month.
      * @returns The calendar as an array[][]
      */
     const generateCalendar = () => {
@@ -178,13 +212,9 @@ function Calendar() {
         return calendar;
     };
 
-    ///////////////////////////////////////////////////////////////////////////////////////////////////////
-    // Handling Calendar
-
     const [selectedDayEvents, setSelectedDayEvents] = useState([]);
 
     // Retrieves events for selected day when View button is clicked
-    // This function was suggested by ChatGPT-4o
     const getEventsForDay = (date) => {
         return events.filter(event => event.date === date.toISOString().split('T')[0]);
     };
@@ -193,20 +223,60 @@ function Calendar() {
         setSelectedDayEvents(getEventsForDay(date));
     };
 
+    ///////////////////////////////////////////////////////////////////////////////////////////////////////
+    // Signing Up for Events
+
     // For Sign Up button
-    function signUp(e) {
-        console.log(e.target.elements.id.value);
-        console.log(e.target.elements.title.value);
-        console.log(e.target.elements.description.value);
-        console.log(e.target.elements.date.value);
+    async function signUp(event, user) {
+        console.log('ID: ' + event.id);
+        console.log('TITLE: ' + event.title);
+        console.log('DESCRIPTION: ' + event.description);
+        console.log('DATE: ' + event.date);
+        console.log('FNAME ' + user.fname);
+        console.log('LNAME ' + user.lname);
+
+        const sendData = {
+            EventId : event.id,
+            UserFirstName : user.fname,
+            UserLastName : user.lname
+        };
+
+        try {
+            const response = await fetch(hostname + '/signup', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(sendData)
+            });
+
+            const receiveData = await response.json();
+            console.log('Successfully signed up: ' + receiveData);
+            
+        } catch (error) {
+            console.log('Failed to Sign Up for event!', error);
+        }
+        setShowModal(false);
     }
 
+    const [showModal, setShowModal] = useState(false);
+    const [selectedEvent, setSelectedEvent] = useState(null);
+
+    const handleCloseModal = () => setShowModal(false);
+
+    const handleShowModal = (event) => {
+        setSelectedEvent(event);
+        setShowModal(true);
+    };
+
     ///////////////////////////////////////////////////////////////////////////////////////////////////////
+    const isAuthenticated = useIsAuthenticated();
 
     return (
         <Container>
             <Row className="mt-3 mb-1">
-                <h1 className="text-center">Scheduling Application</h1>
+                <h2 className="text-center"><strong>Schedule of Events</strong></h2>
+                {isAuthenticated ? <h3>Welcome!</h3> : <></>}
             </Row>
 
             <Row className="mb-3 mt-3 text-center">
@@ -245,7 +315,7 @@ function Calendar() {
 
                             <ButtonToolbar className="mb-2 mx-auto">
                                 <ButtonGroup size="sm" className="mx-auto">
-                                    <Button variant="success" onClick={() => handleEventClick(day)}>
+                                    <Button variant="success" onClick={() => handleEventClick(day)} aria-label={`View events for ${day.toDateString()}`}>
                                         <strong>View</strong>
                                     </Button>
                                 </ButtonGroup>
@@ -257,42 +327,93 @@ function Calendar() {
 
             <hr />
 
+            {/* Corrections suggested by ChatGPT-4o */}
+            {!!selectedEvent && (
+                <Modal show={showModal} onHide={handleCloseModal}>
+                    <Modal.Header closeButton>
+                        <Modal.Title>Sign up for <span className="blue-text"><strong>{selectedEvent.title}</strong></span></Modal.Title>
+                    </Modal.Header>
+
+                    <Modal.Body>
+                        <span  className="event-info">Event Information</span> <br />
+                        <strong>Description:</strong> <br />
+                        {selectedEvent.description}<br />
+                        <hr />
+                        <strong>Date:</strong><br />
+                        {selectedEvent.date}
+                    </Modal.Body>
+
+                    <Modal.Footer className="justify-content-center mb-1">
+                        <Form onSubmit={(e) => {
+                                e.preventDefault();
+                                const user = {
+                                    fname: e.target.elements.fname.value,
+                                    lname: e.target.elements.lname.value
+                                }
+                                signUp(selectedEvent, user);
+                                e.target.reset();
+                            }}>
+                            <Form.Group className='mb-3'>
+                                <Form.Label>First Name</Form.Label>
+                                <Form.Control type="text" name="fname" required />
+
+                                <Form.Label>Last Name</Form.Label>
+                                <Form.Control type="text" name="lname" required />
+                            </Form.Group>
+
+                            <Button variant="success" type="submit">
+                                Sign Up
+                            </Button>
+                            <Button className="ms-5" variant="danger" onClick={handleCloseModal}>
+                                Cancel
+                            </Button>
+                        </Form>
+                    </Modal.Footer>
+                </Modal>
+            )}
+
             {/* Display events for the selected day at the bottom of the page */}
             {selectedDayEvents.length > 0 && (
                 <Container>
                     <Row>
                         <h4>Scheduled Opportunities:</h4>
                     </Row>
+                    
                     <Row>
-                        <Col>
-                            <ul>
-                                <li className="mb-2">
-                                    {/* Header Row */}
-                                    <Row>
-                                        <Col xs={1}>
-                                            Event ID
-                                        </Col>
-                                        <Col>
-                                            Event Title
-                                        </Col>
-                                        <Col>
-                                            Description
-                                        </Col>
-                                        <Col>
-                                            Date
-                                        </Col>
-                                        <Col>
+                        <ul className="no-bullets">
+                            <li className="mb-2">
+                                {/* Header Row */}
+                                <Row>
+                                    <Col xs={1}>
+                                        Event ID
+                                    </Col>
+                                    <Col>
+                                        Event Title
+                                    </Col>
+                                    <Col>
+                                        Description
+                                    </Col>
+                                    <Col>
+                                        Date
+                                    </Col>
+                                    <Col>
 
-                                        </Col>
-                                    </Row>
-                                </li>
+                                    </Col>
+                                </Row>
+                            </li>
 
-                                {selectedDayEvents.map(event => (
-                                <li key={event.id} className="mb-2">
-                                    <Form onSubmit={(e) => {
-                                        e.preventDefault();
-                                        signUp(e);
-                                    }}>
+                            {selectedDayEvents.map(event => (
+                            <li key={event.id} className="mb-2">
+                                <Form onSubmit={(e) => {
+                                    e.preventDefault();
+                                    const event = {
+                                        id: e.target.elements.id.value,
+                                        title: e.target.elements.title.value,
+                                        description: e.target.elements.description.value,
+                                        date: e.target.elements.date.value
+                                    };
+                                    handleShowModal(event);
+                                }}>
                                     <Form.Group>
                                         <Row>
                                             <Col xs={1}>
@@ -308,17 +429,20 @@ function Calendar() {
                                                 <Form.Control type="date" size="sm" value={event.date} id="date" readOnly />
                                             </Col>
                                             <Col>
-                                                <Button className="ms-3" variant="info" size="sm" type="submit">
+                                                <Button className="ms-3" 
+                                                        variant={isAuthenticated ? "info" : "outline-secondary"} 
+                                                        size="sm" 
+                                                        type="submit" 
+                                                        disabled={!isAuthenticated}>
                                                     Sign Up
                                                 </Button>
                                             </Col>
                                         </Row>
                                     </Form.Group>
-                                    </Form>
-                                </li>
-                                ))}
-                            </ul>
-                        </Col>
+                                </Form>
+                            </li>
+                            ))}
+                        </ul>
                     </Row>
                 </Container>
             )}
@@ -326,7 +450,7 @@ function Calendar() {
             <hr />
 
             <Container>
-                <EventCreator addEvent={addEvent} updateEvent={updateEvent} />
+                {isAuthenticated ? <EventCreator addEvent={addEvent} updateEvent={updateEvent} /> : <></>}
             </Container>
 
             <hr />

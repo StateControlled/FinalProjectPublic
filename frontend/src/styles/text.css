@@ -1,0 +1,23 @@
+.green-text {
+    color: #1bd624;
+}
+
+.blue-text {
+    color: #093981;
+}
+
+.black-text {
+    color: #000000;
+}
+
+.gray-text {
+    color: #757373;
+}
+
+.no-bullets, .no-bullets li {
+    list-style-type:none;
+}
+
+.event-info {
+    font-size: 1.5em;
+}

@@ -12,7 +12,6 @@ function EventCreator({addEvent, updateEvent}) {
 
     function newEvent(e) {
         const event = {
-            id: -1,
             title: e.target.elements.title.value,
             description: e.target.elements.description.value,
             date: e.target.elements.date.value

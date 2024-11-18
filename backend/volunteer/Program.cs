@@ -1,12 +1,11 @@
 using System.Text.Json;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.AspNetCore.Authentication;
-using Microsoft.AspNetCore.Authorization;
-using Microsoft.OpenApi.Models;
-using Microsoft.Extensions.Logging;
 
 using volunteer;
 using volunteer.DataModels;
+
+//https://learn.microsoft.com/en-us/aspnet/core/security/authentication/identity-api-authorization?view=aspnetcore-8.0
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -20,7 +19,7 @@ builder.Services.AddSwaggerGen();
 // CORS Configuration: Configure CORS to allow requests from http://127.0.0.1 with any header and method.
 builder.Services.AddCors(options => 
 {
-    options.AddPolicy("AllowAllOrigins",
+    options.AddPolicy("AllowLocalHost",
     builder =>
     {
         builder.WithOrigins("http://127.0.0.1")
@@ -31,44 +30,23 @@ builder.Services.AddCors(options =>
     });
 });
 
-////////////////////////////////////////////////////////////////////////////////////
-// Authentication - having access to a system
-// Authorization - what you have access to in that system
-// Defining basic authentication
-builder.Services.AddAuthorization();
-builder.Services.AddAuthentication("BasicAuthentication").AddScheme<AuthenticationSchemeOptions, BasicAuthenticationHandler>("BasicAuthentication", null);
-
 builder.Services.AddEndpointsApiExplorer();
-builder.Services.AddSwaggerGen(options =>
-{
-    options.AddSecurityDefinition("basic", new OpenApiSecurityScheme
-    {
-        Name        = "Authorization",
-        Type        = SecuritySchemeType.Http,
-        Scheme      = "basic",
-        In          = ParameterLocation.Header,
-        Description = "Basic Authorization header using the Bearer scheme."
-    });
-
-    options.AddSecurityRequirement(new OpenApiSecurityRequirement
-    {
-        {
-            new OpenApiSecurityScheme
-            {
-                Reference = new OpenApiReference
-                {
-                    Type = ReferenceType.SecurityScheme,
-                    Id   = "basic"
-                }
-            },
-            new string[] {}
-        }
-    });
-});
-
-////////////////////////////////////////////////////////////////////////////////////
 
 var app = builder.Build();
+
+////////////////////////////////////////////////////////////////////////////////////
+
+// if (app.Environment.IsDevelopment())
+// {
+//     app.Use(async (context, next) =>
+//     {
+//         foreach (var header in context.Request.Headers)
+//         {
+//             Console.WriteLine($"{header.Key}: {header.Value}");
+//         }
+//         await next.Invoke();
+//     });
+// }
 
 // Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())
@@ -79,23 +57,44 @@ if (app.Environment.IsDevelopment())
 
 app.UseHttpsRedirection();
 
-app.UseCors("AllowAllOrigins");
-app.UseCors("AllowAzure");
+app.UseCors("AllowLocalHost");
 
 ////////////////////////////////////////////////////////////////////////////////////
-// Users and Authentication
+// Endpoints
+
+// Very basic login, no authentication. Authentication is assumed to be deferred to OAuth
+app.MapPost("/login", async (User user) => {
+    using(VDatabaseContext context = new VDatabaseContext())
+    {
+        User? selectedUser = await context.Users.FirstOrDefaultAsync(u => 
+            String.Equals(u.FirstName.ToLower(), user.FirstName.ToLower()) && 
+            String.Equals(u.LastName.ToLower(), user.LastName.ToLower())
+        );
+
+        if (selectedUser is not null) {
+            Console.WriteLine($"Logged in User {selectedUser.FirstName} {selectedUser.LastName}");
+            return Results.Ok(selectedUser);
+        }
+        else
+        {
+            return Results.NotFound("User not found");
+        }
+    }
+})
+.WithName("DefaultLoginUser")
+.WithOpenApi();
 
 // Create a new user
 app.MapPost("/newUser", (User user) => {
     try
     {
-        using(UserContext db = new UserContext())
+        using(VDatabaseContext db = new VDatabaseContext())
         {
-            db.Users.Add(user.GetPrivateUser());
+            db.Users.Add(user);
             db.SaveChanges();
             db.Database.ExecuteSqlRaw("PRAGMA wal_checkpoint;");
         }
-        return Results.Ok("Successfully Created User");
+        return Results.Ok($"Successfully Created User {user}");
     }
     catch(Exception e)
     {
@@ -105,31 +104,104 @@ app.MapPost("/newUser", (User user) => {
 .WithName("CreateNewUser")
 .WithOpenApi();
 
-app.MapPost("/login", (User user) => {
-    using(var db = new UserContext())
+// Allow volunteer to sign up for an event
+app.MapPost("/signUp", ([FromBody] SignUpObject obj) => {
+    try
     {
-        var privateUser = db.Users.FirstOrDefault(pu => pu.Username == user.Username);
+        Console.WriteLine("Sign up");
+        Console.WriteLine(obj.EventId);
+        Console.WriteLine(obj.UserFirstName);
+        Console.WriteLine(obj.UserLastName);
 
-        if (privateUser != null) {
-            Console.WriteLine($"Logged in User {user.Username}");
-            return Results.Ok(privateUser); // Return the token that goes with the user
-        }
-        else
+        using(VDatabaseContext context = new VDatabaseContext())
         {
-            return Results.Unauthorized();
+            Event? selectedEvent = context.Events.Find(obj.EventId);
+            if (selectedEvent is null)
+            {
+                return Results.BadRequest("Invalid event");
+            }
+            Console.WriteLine(selectedEvent);
+
+            User? selectedUser = context.Users.FirstOrDefault(u => 
+                String.Equals(u.FirstName.ToLower(), obj.UserFirstName.ToLower()) && 
+                String.Equals(u.LastName.ToLower(), obj.UserLastName.ToLower())
+            );
+            Console.WriteLine(selectedUser);
+            
+            if (selectedUser is null)
+            {
+                selectedUser = new User{FirstName=obj.UserFirstName, LastName=obj.UserLastName};
+                context.Users.Add(selectedUser);
+                context.SaveChanges();
+                Console.WriteLine("User did not exist. Creating user.");
+            }
+
+            AssocEvent? existingSignup = context.AssocEvents.FirstOrDefault(ae => ae.UserId == selectedUser.Id && ae.EventId == selectedEvent.Id);
+
+            UserReturn userResult = new UserReturn{Id = selectedUser.Id, FirstName = selectedUser.FirstName, LastName = selectedUser.LastName};
+            
+            if (existingSignup is not null)
+            {
+                Console.WriteLine($"Already signed up {existingSignup.EventId}");
+                return Results.Ok(userResult);
+            }
+
+            AssocEvent signup = new AssocEvent{ UserId = selectedUser.Id, EventId = selectedEvent.Id };
+            context.AssocEvents.Add(signup);
+            context.SaveChanges();
+            context.Database.ExecuteSqlRaw("PRAGMA wal_checkpoint;");
+            Console.WriteLine($"Signed user ID {selectedUser.Id} for Event ID {signup.EventId}");
+
+            return Results.Ok(userResult);
         }
+
+    }
+    catch (Exception e)
+    {
+        return Results.BadRequest($"Unable to sign up user for event: {e.Message}");
     }
 })
-.WithName("LoginUser")
-.WithOpenApi()
-.RequireAuthorization(new AuthorizeAttribute() { AuthenticationSchemes="BasicAuthentication" });
-
-app.MapPost("/signUp", () => {
-    Console.WriteLine("Sign up");
-})
 .WithName("SignUp")
-.WithOpenApi()
-.RequireAuthorization();
+.WithOpenApi();
+
+/// Corrected by ChatGPT-4o
+app.MapPost("/getSignUps", async ([FromBody] UserReturn user) => {
+    try
+    {
+        using(VDatabaseContext context = new VDatabaseContext())
+        {
+            User? selectedUser = await context.Users.FirstOrDefaultAsync(u => u.FirstName == user.FirstName && u.LastName == user.LastName);
+            if (selectedUser is null)
+            {
+                return Results.BadRequest("Invalid user");
+            }
+
+            // Get all associated event IDs for the user
+            var eventIds = await context.AssocEvents
+                .Where(ae => ae.UserId == selectedUser.Id)
+                .Select(ae => ae.EventId)
+                .ToListAsync();
+
+            // Get all events matching the IDs
+            var events = await context.Events
+                .Where(e => eventIds.Contains(e.Id))
+                .ToListAsync();
+
+            if (events is null)
+            {
+                Results.NotFound("No events found");
+            }
+
+            return Results.Ok(events);
+        }
+    }
+    catch (Exception e)
+    {
+        return Results.Problem($"An error occurred when trying to retreive events: {e.Message}");
+    }
+})
+.WithName("GetSignUps")
+.WithOpenApi();
 
 ////////////////////////////////////////////////////////////////////////////////////
 
@@ -137,15 +209,10 @@ app.MapPost("/signUp", () => {
 app.MapGet("/getEvents", () =>
 {
     Console.WriteLine("GET Events");
-    var options = new JsonSerializerOptions
+    using(VDatabaseContext context = new VDatabaseContext())
     {
-        PropertyNameCaseInsensitive = true
-    };
-
-    using(EventContext context = new EventContext())
-    {
-        List<Event>? source = context.Events.ToList();
-        return source;
+        List<Event>? events = context.Events.ToList();
+        return Results.Ok(events);
     }
 })
 .WithName("GetEvents")
@@ -157,13 +224,19 @@ app.MapPost("/postEvent", (Event evnt) =>
     Console.WriteLine("POST Event");
     try
     {
-        using(EventContext context = new EventContext())
+        if (evnt.Title is null || evnt.Description is null || evnt.Date is null)
+        {
+            return Results.BadRequest($"Unable to create event: Missing data");
+        }
+
+        using(VDatabaseContext context = new VDatabaseContext())
         {
             context.Add(evnt);
             context.SaveChanges();
+            context.Database.ExecuteSqlRaw("PRAGMA wal_checkpoint;");
 
             Console.WriteLine($"Created Event: {evnt}");
-            return Results.Ok(evnt);
+            return Results.Ok(new EventReturn(evnt));
         }
     }
     catch (Exception e)
@@ -180,19 +253,24 @@ app.MapPut("/updateEvent", (Event evnt) =>
     try
     {
         Console.WriteLine("PUT Event");
-        using(EventContext context = new EventContext())
+        if (evnt.Title is null || evnt.Description is null || evnt.Date is null)
         {
-            Event? e = context.Events.Where(c => c.Id == evnt.Id).FirstOrDefault();
-            if (e != null)
+            return Results.BadRequest($"Unable to create event: Missing data");
+        }
+
+        using(VDatabaseContext context = new VDatabaseContext())
+        {
+            Event? selectedEvent = context.Events.FirstOrDefault(dbEvent => dbEvent.Id == evnt.Id);
+            if (selectedEvent is not null)
             {
-                e.Title = evnt.Title;
-                e.Description = evnt.Description;
-                e.Date = evnt.Date;
-                context.Update(e);
+                selectedEvent.Title = evnt.Title;
+                selectedEvent.Description = evnt.Description;
+                selectedEvent.Date = evnt.Date;
+                context.Update(selectedEvent);
                 context.SaveChanges();
             }
             Console.WriteLine($"Updated Event: {evnt}");
-            return Results.Ok(evnt);
+            return Results.Ok(new EventReturn(evnt));
         }
     }
     catch (Exception e)
@@ -201,38 +279,58 @@ app.MapPut("/updateEvent", (Event evnt) =>
     }
 })
 .WithName("UpdateEvent")
-.WithOpenApi()
-.RequireAuthorization();
+.WithOpenApi();
 
 // Reset Data for testing purposes
 app.MapGet("/resetData", () => {
     Console.WriteLine("Resetting Database");
-    using(DbContext events = new EventContext())
+    try
     {
-        // Destroy then (re)create database
-        events.Database.EnsureDeleted();
-        events.Database.EnsureCreated();
-
-        // Read data from JSON file
-        var options = new JsonSerializerOptions
+        using(DbContext context = new VDatabaseContext())
         {
-            PropertyNameCaseInsensitive = true
-        };
+            // Destroy then (re)create database
+            context.Database.EnsureDeleted();
+            context.Database.EnsureCreated();
 
-        using (StreamReader r = new StreamReader("events.json"))
-        {
-            string? json = r.ReadToEnd();
-            List<Event>? source = JsonSerializer.Deserialize<List<Event>>(json, options);
-
-            #pragma warning disable CS8602 // Suppress 'Dereference of a possibly null reference' warning.
-            foreach (var item in source)
+            // Read data from JSON file
+            var options = new JsonSerializerOptions
             {
-                events.Add(item);
-            }
-            #pragma warning restore CS8602 // Dereference of a possibly null reference.
-        };
-        events.SaveChanges();
-        events.Database.ExecuteSqlRaw("PRAGMA wal_checkpoint;");
+                PropertyNameCaseInsensitive = true
+            };
+
+            using (StreamReader r = new StreamReader("events.json"))
+            {
+                string? json = r.ReadToEnd();
+                List<Event>? source = JsonSerializer.Deserialize<List<Event>>(json, options);
+
+                #pragma warning disable CS8602 // Suppress 'Dereference of a possibly null reference' warning.
+                foreach (var item in source)
+                {
+                    context.Add(item);
+                }
+                #pragma warning restore CS8602 // Dereference of a possibly null reference.
+            };
+
+            using (StreamReader r = new StreamReader("users.json"))
+            {
+                string? json = r.ReadToEnd();
+                List<User>? source = JsonSerializer.Deserialize<List<User>>(json, options);
+
+                #pragma warning disable CS8602
+                foreach (var item in source)
+                {
+                    context.Add(item);
+                }
+                #pragma warning restore CS8602
+            };
+
+            context.SaveChanges();
+            context.Database.ExecuteSqlRaw("PRAGMA wal_checkpoint;");
+        }
+    }
+    catch (Exception e)
+    {
+        Console.WriteLine("Error resetting database: " + e.Message);
     }
 })
 .WithName("Reset")
